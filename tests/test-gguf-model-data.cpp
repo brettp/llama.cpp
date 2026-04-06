@@ -1,6 +1,11 @@
 #include "gguf-model-data.h"
+#include "common.h"
+#include "download.h"
+#include "hf-cache.h"
 
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 
 #define TEST_ASSERT(cond, msg) \
     do { \
@@ -10,8 +15,53 @@
         } \
     } while (0)
 
+static common_download_model_result get_cached_split_files_reverse_order() {
+    // Offline split GGUF must return files in sequential order, not filesystem order.
+    namespace fs = std::filesystem;
+
+    auto tmp = fs::temp_directory_path() / "llama-test-gguf-model-data";
+    fs::remove_all(tmp);
+    fs::create_directories(tmp);
+
+    const std::string commit(40, 'a');
+    fs::path repo_dir = tmp / "models--testowner--testrepo";
+    fs::path snap_dir = repo_dir / "snapshots" / commit;
+
+    fs::create_directories(repo_dir / "refs");
+    { std::ofstream f(repo_dir / "refs" / "main"); f << commit; }
+
+    // Create files out of order to confirm sort works
+    fs::create_directories(snap_dir);
+    { std::ofstream f(snap_dir / "model-Q4_K_M-00002-of-00002.gguf"); }
+    { std::ofstream f(snap_dir / "model-Q4_K_M-00001-of-00002.gguf"); }
+
+#ifdef _WIN32
+    _putenv_s("LLAMA_CACHE", tmp.string().c_str());
+#else
+    setenv("LLAMA_CACHE", tmp.string().c_str(), 1);
+#endif
+
+    common_params_model model;
+    model.hf_repo = "testowner/testrepo";
+
+    common_download_model_opts opts;
+    opts.offline = true;
+
+    auto split_result = common_download_model(model, "", opts);
+
+    fs::remove_all(tmp);
+#ifdef _WIN32
+    _putenv_s("LLAMA_CACHE", "");
+#else
+    unsetenv("LLAMA_CACHE");
+#endif
+
+    return split_result;
+}
+
 int main() {
     fprintf(stderr, "=== test-gguf-model-data ===\n");
+
 
     // Fetch Qwen3-0.6B Q8_0 metadata
     auto result = gguf_fetch_model_meta("ggml-org/Qwen3-0.6B-GGUF", "Q8_0");
@@ -148,6 +198,11 @@ int main() {
     TEST_ASSERT(model4.n_embd_head_v == 128, "expected n_embd_head_v == 128");
     TEST_ASSERT(model4.n_vocab == 128896, "expected n_vocab == 128896");
     TEST_ASSERT(model4.tensors.size() == 754, "expected tensor count == 754");
+
+    auto split_result = get_cached_split_files_reverse_order();
+
+    TEST_ASSERT(!split_result.model_path.empty(), "expected non-empty model path");
+    TEST_ASSERT(split_result.model_path.find("00001-of-00002") != std::string::npos, "expected first file 00001");
 
     fprintf(stderr, "=== ALL TESTS PASSED ===\n");
     return 0;

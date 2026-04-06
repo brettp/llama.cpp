@@ -511,9 +511,14 @@ static hf_cache::hf_files get_split_files(const hf_cache::hf_files & files,
     if (split.count <= 1) {
         return {file};
     }
-    hf_cache::hf_files result;
 
-    for (const auto & f : files) {
+    hf_cache::hf_files sorted_files = files;
+    std::sort(sorted_files.begin(), sorted_files.end(), [](const hf_cache::hf_file & a, const hf_cache::hf_file & b) {
+        return a.path < b.path;
+    });
+
+    hf_cache::hf_files result;
+    for (const auto & f : sorted_files) {
         auto split_f = get_gguf_split_info(f.path);
         if (split_f.count == split.count && split_f.prefix == split.prefix) {
             result.push_back(f);
